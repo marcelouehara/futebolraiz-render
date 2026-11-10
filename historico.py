@@ -15,4 +15,4 @@ with open(path, "a", newline="") as f:
         w.writerow(["data", "id", "pagina", "titulo", "fonte", "duracao", "video"])
     w.writerow([datetime.date.today().isoformat(), job["id"], job.get("pagina", ""), job.get("title", ""),
                 job.get("fonte", ""), meta["duration"],
-                f"https://marcelouehara.github.io/dustlight-render/{job['id']}.mp4"])
+                f"https://marcelouehara.github.io/{os.environ.get('GITHUB_REPOSITORY', '/futebolraiz-render').split('/')[1]}/{job['id']}.mp4"])

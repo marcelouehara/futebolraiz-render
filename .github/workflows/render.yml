@@ -43,7 +43,7 @@ jobs:
           cd /tmp/pub
           ls *.mp4 | sort | head -n -5 | sed 's/\.mp4$//' | while read id; do rm -f "$id.mp4" "$id.json"; done
           git init -q -b videos
-          git config user.name "dustlight-render"
+          git config user.name "futebolraiz-render"
           git config user.email "actions@github.com"
           git add -A
           git commit -q -m "videos $(date -u +%FT%TZ)"

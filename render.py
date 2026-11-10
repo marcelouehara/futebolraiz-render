@@ -1,4 +1,4 @@
-"""Monta o video vertical do Dustlight Films a partir do job enviado pelo n8n (repository_dispatch).
+"""Monta o video vertical do Futebol Raiz Filmes a partir do job enviado pelo n8n (repository_dispatch).
 
 JOB (env, JSON): {"id", "title", "voice", "rate", "scenes": [{"narration", "image_url"}]}
 Saida: out/<id>.mp4 e out/<id>.json ({"id", "title", "duration"}).
@@ -13,10 +13,10 @@ import edge_tts
 
 W, H, FPS = 1080, 1920, 30
 PAD = 0.3  # respiro depois de cada fala
-HIGHLIGHT = "&H42B9F5&"  # #F5B942 em BGR (ASS)
+HIGHLIGHT = "&H22C8F0&"  # #F0C822 (amarelo mostarda) em BGR (ASS)
 
 job = json.loads(os.environ["JOB"])
-voice = job.get("voice") or "en-US-AndrewMultilingualNeural"
+voice = job.get("voice") or "pt-BR-AntonioNeural"
 rate = job.get("rate") or "+0%"
 os.makedirs("work", exist_ok=True)
 os.makedirs("out", exist_ok=True)
@@ -50,7 +50,8 @@ async def tts_voz(text, path, voz):
 async def tts(text, path):
     """Tenta a voz pedida e depois vozes reserva; o servico as vezes devolve 'No audio received'."""
     erro = None
-    for voz in [voice, "en-US-GuyNeural", "en-US-ChristopherNeural"]:
+    reservas = ["pt-BR-AntonioNeural", "pt-BR-ThalitaMultilingualNeural", "pt-BR-FranciscaNeural"] if voice.startswith("pt-") else ["en-US-GuyNeural", "en-US-ChristopherNeural"]
+    for voz in [voice] + [v for v in reservas if v != voice]:
         for tentativa in range(3):
             try:
                 return await tts_voz(text, path, voz)
@@ -83,7 +84,7 @@ def legenda(words):
 clips, todas_palavras, t0 = [], [], 0.0
 for i, cena in enumerate(job["scenes"]):
     img, mp3, clip = f"work/{i}.jpg", f"work/{i}.mp3", f"work/{i}.mp4"
-    req = urllib.request.Request(cena["image_url"], headers={"User-Agent": "dustlight-render"})
+    req = urllib.request.Request(cena["image_url"], headers={"User-Agent": "futebolraiz-render"})
     with urllib.request.urlopen(req, timeout=60) as r, open(img, "wb") as f:
         f.write(r.read())
     words = asyncio.run(tts(cena["narration"], mp3))
@@ -92,6 +93,7 @@ for i, cena in enumerate(job["scenes"]):
     z = f"1+0.12*on/{frames}" if i % 2 == 0 else f"1.12-0.12*on/{frames}"
     vf = (f"scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,crop={W * 2}:{H * 2},"
           f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps={FPS},"
+          f"eq=saturation=0.85:contrast=1.05,colorbalance=rs=0.04:bs=-0.04,noise=alls=10:allf=t,"
           f"fade=t=in:st=0:d=0.25,format=yuv420p")
     run("ffmpeg", "-y", "-i", img, "-i", mp3, "-filter_complex", f"[0:v]{vf}[v];[1:a]apad[a]",
         "-map", "[v]", "-map", "[a]", "-t", str(d), "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
