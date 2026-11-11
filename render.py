@@ -16,6 +16,8 @@ import edge_tts
 
 W, H, FPS = 1080, 1920, 30
 PAD = 0.3  # respiro depois de cada fala
+# Grafia so para a pronuncia da voz; na legenda volta ao normal
+TROCAS_LEGENDA = {"FIRÚLA": "FIRULA"}
 HIGHLIGHT = "&H22C8F0&"  # #F0C822 (amarelo mostarda) em BGR (ASS)
 
 job = json.loads(os.environ["JOB"])
@@ -59,7 +61,12 @@ def tempos_palavras(path, texto):
     from faster_whisper import WhisperModel
     if _whisper is None:
         _whisper = WhisperModel("base", device="cpu", compute_type="int8")
-    segs, _ = _whisper.transcribe(path, language="pt", word_timestamps=True, initial_prompt=texto)
+    # audio decodificado pelo ffmpeg (o PyAV do faster-whisper tem conflito de versao no runner)
+    import numpy as np
+    pcm = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-ar", "16000", "-ac", "1", "-f", "f32le", "-"],
+                         check=True, capture_output=True).stdout
+    segs, _ = _whisper.transcribe(np.frombuffer(pcm, np.float32), language="pt", word_timestamps=True,
+                                  initial_prompt=texto)
     ouvidas = [(w.start, w.end) for s in segs for w in (s.words or [])]
     roteiro = texto.split()
     if len(ouvidas) == len(roteiro):
@@ -125,7 +132,10 @@ def legenda(words):
             fim = grupo[k + 1][0] if k + 1 < len(grupo) else fim_grupo
             txt = " ".join((f"{{\\c{HIGHLIGHT}}}{w}{{\\c&HFFFFFF&}}" if j == k else w)
                            for j, (_, _, w) in enumerate((a, b, c.replace("{", "(").replace("}", ")")) for a, b, c in grupo))
-            linhas.append(f"Dialogue: 0,{ass_time(ini)},{ass_time(fim)},Cap,,0,0,0,,{txt.upper()}")
+            txt = txt.upper()
+            for a, b in TROCAS_LEGENDA.items():
+                txt = txt.replace(a, b)
+            linhas.append(f"Dialogue: 0,{ass_time(ini)},{ass_time(fim)},Cap,,0,0,0,,{txt}")
     return "\n".join(linhas)
 
 
