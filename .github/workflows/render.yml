@@ -57,8 +57,11 @@ jobs:
           if git fetch -q origin videos; then git archive FETCH_HEAD | tar -x -C /tmp/pub; fi
           cp out/*.mp4 out/*.json /tmp/pub/
           # historico.csv: 1 linha por video, e a memoria de temas que o n8n le antes de escolher o fato
-          python3 historico.py /tmp/pub/historico.csv
+          # job de teste ("teste": true) nao entra no historico de temas
+          if [ "$(echo "$JOB" | jq -r '.teste // false')" != "true" ]; then python3 historico.py /tmp/pub/historico.csv; fi
           cd /tmp/pub
+          # sobras com nome fora do padrao data-hora (testes antigos) ficavam para sempre; teste novo usa id com data
+          ls *.mp4 | grep -v '^20' | sed 's/\.mp4$//' | while read id; do rm -f "$id.mp4" "$id.json"; done
           ls *.mp4 | sort | head -n -5 | sed 's/\.mp4$//' | while read id; do rm -f "$id.mp4" "$id.json"; done
           git init -q -b videos
           git config user.name "futebolraiz-render"

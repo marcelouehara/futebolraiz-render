@@ -1,6 +1,6 @@
 """Monta o video vertical do Futebol Raiz Filmes a partir do job enviado pelo n8n (repository_dispatch).
 
-JOB (env, JSON): {"id", "title", "voice", "rate", "fish": {"reference_id", "model"}?, "scenes": [{"narration", "image_url"}]}
+JOB (env, JSON): {"id", "title", "voice", "rate", "hook"?, "emphasis"?, "ambiente"?, "fish": {"reference_id", "model"}?, "scenes": [{"narration", "image_url"}]}
 Com "fish" (e o secret FISH_API_KEY), a voz vem do Fish Audio e os tempos das palavras do Whisper;
 se o Fish falhar, cai no edge-tts.
 Saida: out/<id>.mp4 e out/<id>.json ({"id", "title", "duration"}).
@@ -19,6 +19,11 @@ PAD = 0.3  # respiro depois de cada fala
 # Grafia so para a pronuncia da voz; na legenda volta ao normal
 TROCAS_LEGENDA = {"FIRÚLA": "FIRULA"}
 HIGHLIGHT = "&H22C8F0&"  # #F0C822 (amarelo mostarda) em BGR (ASS)
+# Retencao: gancho escrito no topo nos primeiros segundos, palavras-chave maiores, som ambiente baixinho
+GANCHO_SEG = 3.2
+AMBIENTE_SRC = "anoisesrc=color=pink:amplitude=0.8:sample_rate=44100"
+AMBIENTE_FILTRO = "highpass=f=350,lowpass=f=1600,tremolo=f=0.25:d=0.5"
+AMBIENTE_DB = 24  # quantos dB abaixo da voz
 
 job = json.loads(os.environ["JOB"])
 voice = job.get("voice") or "pt-BR-AntonioNeural"
@@ -122,21 +127,48 @@ def ass_time(t):
     return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
 
 
+def palavra_legenda(w):
+    w = w.replace("{", "(").replace("}", ")").upper()
+    for a, b in TROCAS_LEGENDA.items():
+        w = w.replace(a, b)
+    return w
+
+
+def chave(w):
+    return re.sub(r"\W", "", w).upper()
+
+
+ENFASE = {chave(w) for w in job.get("emphasis") or [] if chave(w)}
+
+
 def legenda(words):
-    """Grupos de 3 palavras, palavra falada em destaque."""
+    """Grupos de 3 palavras, palavra falada em destaque; nomes, numeros e palavras-chave sempre maiores e coloridos."""
     linhas = []
     grupos = [words[i:i + 3] for i in range(0, len(words), 3)]
     for g, grupo in enumerate(grupos):
         fim_grupo = grupos[g + 1][0][0] if g + 1 < len(grupos) else grupo[-1][1] + 0.4
         for k, (ini, _, _) in enumerate(grupo):
             fim = grupo[k + 1][0] if k + 1 < len(grupo) else fim_grupo
-            txt = " ".join((f"{{\\c{HIGHLIGHT}}}{w}{{\\c&HFFFFFF&}}" if j == k else w)
-                           for j, (_, _, w) in enumerate((a, b, c.replace("{", "(").replace("}", ")")) for a, b, c in grupo))
-            txt = txt.upper()
-            for a, b in TROCAS_LEGENDA.items():
-                txt = txt.replace(a, b)
-            linhas.append(f"Dialogue: 0,{ass_time(ini)},{ass_time(fim)},Cap,,0,0,0,,{txt}")
+            partes = []
+            for j, (_, _, w) in enumerate(grupo):
+                txt = palavra_legenda(w)
+                if chave(w) in ENFASE or any(c.isdigit() for c in w):
+                    txt = f"{{\\fscx118\\fscy118\\c{HIGHLIGHT}}}{txt}{{\\fscx100\\fscy100\\c&HFFFFFF&}}"
+                elif j == k:
+                    txt = f"{{\\c{HIGHLIGHT}}}{txt}{{\\c&HFFFFFF&}}"
+                partes.append(txt)
+            pop = "{\\fscx90\\fscy90\\t(0,90,\\fscx100\\fscy100)}" if k == 0 else ""
+            linhas.append(f"Dialogue: 0,{ass_time(ini)},{ass_time(fim)},Cap,,0,0,0,,{pop}{' '.join(partes)}")
     return "\n".join(linhas)
+
+
+def gancho(fim):
+    """Frase-gancho fixa no topo enquanto a primeira cena comeca."""
+    txt = palavra_legenda((job.get("hook") or "").strip())
+    if not txt:
+        return ""
+    return (f"Dialogue: 1,{ass_time(0)},{ass_time(fim)},Hook,,0,0,0,,"
+            f"{{\\fad(0,250)\\fscx70\\fscy70\\t(0,160,\\fscx100\\fscy100)}}{txt}")
 
 
 clips, todas_palavras, t0 = [], [], 0.0
@@ -160,6 +192,8 @@ for i, cena in enumerate(job["scenes"]):
     todas_palavras += [(t0 + a, t0 + b, w) for a, b, w in words]
     clips.append(clip)
     t0 += real
+    if i == 0:
+        fim_cena1 = real
 
 with open("work/list.txt", "w") as f:
     f.writelines(f"file '{os.path.basename(c)}'\n" for c in clips)
@@ -173,16 +207,38 @@ PlayResY: {H}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Hook,DejaVu Sans,84,&H00FFFFFF,&H00FFFFFF,&H50000000,&H00000000,-1,0,0,0,100,100,0,0,3,22,0,8,90,90,300,1
 Style: Cap,DejaVu Sans,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,6,2,2,60,60,560,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+{gancho(min(GANCHO_SEG, fim_cena1))}
 {legenda(todas_palavras)}
 """)
 
 final = f"out/{job['id']}.mp4"
-run("ffmpeg", "-y", "-i", "work/all.mp4", "-vf", "ass=work/subs.ass", "-c:v", "libx264", "-preset", "veryfast",
-    "-crf", "21", "-c:a", "copy", "-movflags", "+faststart", final)
+
+
+def volume_medio(path):
+    err = subprocess.run(["ffmpeg", "-i", path, "-af", "volumedetect", "-vn", "-f", "null", "-"],
+                         capture_output=True, text=True).stderr
+    return float(re.search(r"mean_volume: (-?[\d.]+) dB", err).group(1))
+
+
+total = duration("work/all.mp4")
+if job.get("ambiente", True):
+    run("ffmpeg", "-y", "-f", "lavfi", "-t", f"{total:.2f}", "-i", AMBIENTE_SRC, "-af",
+        f"{AMBIENTE_FILTRO},afade=t=in:d=1.5,afade=t=out:st={max(total - 1.5, 0):.2f}:d=1.5",
+        "-ac", "2", "-ar", "44100", "work/bg.wav")
+    ganho = volume_medio("work/all.mp4") - AMBIENTE_DB - volume_medio("work/bg.wav")
+    print(f"ambiente: ganho {ganho:.1f} dB", flush=True)
+    run("ffmpeg", "-y", "-i", "work/all.mp4", "-i", "work/bg.wav", "-filter_complex",
+        f"[0:v]ass=work/subs.ass[v];[1:a]volume={ganho:.1f}dB[bg];[0:a][bg]amix=inputs=2:duration=first:normalize=0[a]",
+        "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", final)
+else:
+    run("ffmpeg", "-y", "-i", "work/all.mp4", "-vf", "ass=work/subs.ass", "-c:v", "libx264", "-preset", "veryfast",
+        "-crf", "21", "-c:a", "copy", "-movflags", "+faststart", final)
 meta = {"id": job["id"], "title": job.get("title"), "duration": round(duration(final), 2)}
 json.dump(meta, open(f"out/{job['id']}.json", "w"))
 print(meta)
