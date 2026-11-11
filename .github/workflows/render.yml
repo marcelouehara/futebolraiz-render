@@ -22,11 +22,17 @@ jobs:
         # A rede do runner as vezes falha: cada tentativa tem limite de tempo e repete ate 4 vezes
         timeout-minutes: 15
         run: |
-          for i in 1 2 3 4; do
-            timeout 180 sudo apt-get update -qq || true
+          for i in 1 2; do
+            timeout 120 sudo apt-get update -qq || true
             if timeout 240 sudo apt-get install -y -qq ffmpeg fonts-dejavu-core > /dev/null; then break; fi
             echo "apt falhou (tentativa $i)"; sleep 15
           done
+          # Plano B: ffmpeg estatico baixado do proprio GitHub, se o apt nao conseguiu
+          if ! command -v ffmpeg; then
+            curl -sL --retry 5 --max-time 300 -o /tmp/ff.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+            mkdir -p /tmp/ff && tar -xf /tmp/ff.tar.xz -C /tmp/ff --strip-components=1
+            echo "/tmp/ff/bin" >> "$GITHUB_PATH"; export PATH="/tmp/ff/bin:$PATH"
+          fi
           command -v ffmpeg
           for i in 1 2 3; do timeout 300 pip install -q --retries 5 --timeout 30 edge-tts faster-whisper && break; sleep 15; done
 
