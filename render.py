@@ -1,12 +1,15 @@
 """Monta o video vertical do Futebol Raiz Filmes a partir do job enviado pelo n8n (repository_dispatch).
 
-JOB (env, JSON): {"id", "title", "voice", "rate", "scenes": [{"narration", "image_url"}]}
+JOB (env, JSON): {"id", "title", "voice", "rate", "fish": {"reference_id", "model"}?, "scenes": [{"narration", "image_url"}]}
+Com "fish" (e o secret FISH_API_KEY), a voz vem do Fish Audio e os tempos das palavras do Whisper;
+se o Fish falhar, cai no edge-tts.
 Saida: out/<id>.mp4 e out/<id>.json ({"id", "title", "duration"}).
 """
 import asyncio
 import json
 import os
 import subprocess
+import re
 import urllib.request
 
 import edge_tts
@@ -47,8 +50,53 @@ async def tts_voz(text, path, voz):
     return words
 
 
+_whisper = None
+
+
+def tempos_palavras(path, texto):
+    """Fish nao devolve o tempo de cada palavra: o Whisper marca os tempos e o texto do roteiro e mantido."""
+    global _whisper
+    from faster_whisper import WhisperModel
+    if _whisper is None:
+        _whisper = WhisperModel("base", device="cpu", compute_type="int8")
+    segs, _ = _whisper.transcribe(path, language="pt", word_timestamps=True, initial_prompt=texto)
+    ouvidas = [(w.start, w.end) for s in segs for w in (s.words or [])]
+    roteiro = texto.split()
+    if len(ouvidas) == len(roteiro):
+        return [(a, b, w) for (a, b), w in zip(ouvidas, roteiro)]
+    # contagem diferente: espalha as palavras do roteiro entre o inicio e o fim da fala, pelo tamanho de cada uma
+    ini = ouvidas[0][0] if ouvidas else 0.0
+    fim = ouvidas[-1][1] if ouvidas else duration(path)
+    pesos = [len(re.sub(r"\W", "", w)) + 1 for w in roteiro]
+    total, t, out = sum(pesos), ini, []
+    for w, p in zip(roteiro, pesos):
+        d = (fim - ini) * p / total
+        out.append((t, t + d, w))
+        t += d
+    return out
+
+
+def tts_fish(text, path):
+    cfg = job["fish"]
+    body = json.dumps({"text": text, "reference_id": cfg["reference_id"], "format": "mp3",
+                       "prosody": {"speed": cfg.get("speed", 1.0)}}).encode()
+    req = urllib.request.Request("https://api.fish.audio/v1/tts", body, {
+        "Authorization": "Bearer " + os.environ["FISH_API_KEY"], "Content-Type": "application/json",
+        "model": cfg.get("model", "s1")})
+    with urllib.request.urlopen(req, timeout=120) as r, open(path, "wb") as f:
+        f.write(r.read())
+    return tempos_palavras(path, text)
+
+
 async def tts(text, path):
     """Tenta a voz pedida e depois vozes reserva; o servico as vezes devolve 'No audio received'."""
+    if job.get("fish") and os.environ.get("FISH_API_KEY"):
+        for tentativa in range(3):
+            try:
+                return tts_fish(text, path)
+            except Exception as e:  # noqa: BLE001 - qualquer falha do Fish cai no edge-tts
+                print(f"fish falhou (tentativa {tentativa + 1}): {e}", flush=True)
+                await asyncio.sleep(3)
     erro = None
     reservas = ["pt-BR-AntonioNeural", "pt-BR-ThalitaMultilingualNeural", "pt-BR-FranciscaNeural"] if voice.startswith("pt-") else ["en-US-GuyNeural", "en-US-ChristopherNeural"]
     for voz in [voice] + [v for v in reservas if v != voice]:

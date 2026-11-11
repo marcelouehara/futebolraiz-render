@@ -22,11 +22,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core > /dev/null
-          pip install -q edge-tts
+          pip install -q edge-tts faster-whisper
 
       - name: Renderizar
         env:
           JOB: ${{ toJson(github.event.client_payload) }}
+          FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
         run: python3 render.py
 
       # Branch "videos" sem historico: guarda so os 5 videos mais recentes (o Buffer baixa logo apos publicar)
