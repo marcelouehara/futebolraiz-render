@@ -14,15 +14,21 @@ concurrency:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - name: Dependencias
+        # A rede do runner as vezes falha: cada tentativa tem limite de tempo e repete ate 4 vezes
+        timeout-minutes: 15
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core > /dev/null
-          pip install -q edge-tts faster-whisper
+          for i in 1 2 3 4; do
+            timeout 180 sudo apt-get update -qq || true
+            if timeout 240 sudo apt-get install -y -qq ffmpeg fonts-dejavu-core > /dev/null; then break; fi
+            echo "apt falhou (tentativa $i)"; sleep 15
+          done
+          command -v ffmpeg
+          for i in 1 2 3; do timeout 300 pip install -q --retries 5 --timeout 30 edge-tts faster-whisper && break; sleep 15; done
 
       - name: Renderizar
         env:
